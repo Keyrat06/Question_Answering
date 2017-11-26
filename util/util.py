@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Variable
 from collections import Counter
 from io import open
 import numpy as np
@@ -60,6 +61,7 @@ class data_loader():
             mapped_body = [self.vocab_map.get(word, self.vocab_map[unk]) for word in self.raw_corpus[id][1]]
             self.mapped_corpus[id] = (mapped_title, mapped_body)
         self.num_tokens = len(self.vocab_map)
+
 
     def read_annotations(self, path, K_neg=20, prune_pos_cnt=10):
         lst = [ ]
@@ -163,7 +165,38 @@ class Encoder(nn.Module):
         self.embedding = nn.Embedding(input_size, embedding_dim)
 
     def forward(self, input):
-        return self.embedding(input)
+        return self.embedding(Variable(torch.from_numpy(input)))
+
+
+class pre_embedded_Encoder():
+    def __init__(self, padding_id, data_loader, emb_path):
+        self.padding_id = padding_id
+        self.embedding_size = 200
+        self.embeddings = self.load_embedding_iterator(emb_path, data_loader)
+
+    def load_embedding_iterator(self, path, data_loader):
+        embs = np.ones((len(data_loader.vocab_map), self.embedding_size))*0.001
+        with open(path) as fin:
+            for line in fin:
+                line = line.strip()
+                if line:
+                    parts = line.split()
+                    word = parts[0]
+                    vals = np.array([ float(x) for x in parts[1:] ])
+                    if word in data_loader.vocab_map:
+                        embs[data_loader.vocab_map[word]] = vals
+        return embs
+
+    def __call__(self, *input, **kwargs):
+        return self.embed_batch(*input, **kwargs)
+
+    def embed_batch(self, input):
+        output = np.zeros((len(input), len(input[0]), self.embedding_size))
+        for i in xrange(len(input)):
+            for j in xrange(len(input[i])):
+                output[i,j] = self.embeddings[input[i, j]]
+        return Variable(torch.from_numpy(output)).float()
+
 
 
 class CNN(nn.Module):

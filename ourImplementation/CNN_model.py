@@ -15,10 +15,12 @@ def main():
     dev_file = "data/dev.txt"
     test_file = "data/test.txt"
     corpus_file = "data/text_tokenized.txt"
+    embedding_path = "data/vectors_pruned.200.txt"
 
-    data_loader = util.data_loader(corpus_file, cut_off=10, padding=padding)
+    data_loader = util.data_loader(corpus_file, cut_off=2, padding=padding)
 
-    encoder = util.Encoder(data_loader.num_tokens, embedding_size, data_loader.vocab_map[padding])
+    # encoder = util.Encoder(data_loader.num_tokens, embedding_size, data_loader.vocab_map[padding])
+    pre_encoder = util.pre_embedded_Encoder(data_loader.vocab_map[padding], data_loader, embedding_path)
     CNN = util.CNN(embedding_size, CNN_size, convolution_size)
 
     dev  = data_loader.read_annotations(dev_file)
@@ -26,13 +28,14 @@ def main():
     test = data_loader.read_annotations(test_file)
     test_data = data_loader.create_eval_batches(test)
     train_data = data_loader.read_annotations(train_file)
-    train_losses, dev_metrics, test_metrics = train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size)
+    # train_losses, dev_metrics, test_metrics = train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, False)
+    train_losses, dev_metrics, test_metrics = train(pre_encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size)
     torch.save(encoder, "encoder.model")
     torch.save(CNN, "CNN.model")
     return train_losses, dev_metrics, test_metrics
 
 
-def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size):
+def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, pre_trained_encoder=True):
     train_losses = []
     dev_metrics = []
     test_metrics = []
@@ -43,8 +46,9 @@ def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data,
     print "At the start of epoch"
     print "The DEV MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(dev_metrics[-1][0], dev_metrics[-1][1], dev_metrics[-1][2], dev_metrics[-1][3])
     print "The TEST MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(test_metrics[-1][0], test_metrics[-1][1], test_metrics[-1][2], test_metrics[-1][3])
+    if not(pre_trained_encoder):
+        encoder_optimizer = torch.optim.Adam(encoder.parameters(), 0.001, weight_decay=0.0)
 
-    encoder_optimizer = torch.optim.Adam(encoder.parameters(), 0.001, weight_decay=0.0)
     CNN_optimizer = torch.optim.Adam(CNN.parameters(), 0.001, weight_decay=0.0)
     for epoch in xrange(num_epoch):
         print "Training epoch {}".format(epoch)
@@ -55,7 +59,8 @@ def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data,
         for i in t:
             #  reset gradients
             CNN_optimizer.zero_grad()
-            encoder_optimizer.zero_grad()
+            if not(pre_trained_encoder):
+                encoder_optimizer.zero_grad()
 
             #  get train batch and find current loss
             idts, idbs, idps = train_batches[i]
@@ -63,7 +68,9 @@ def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data,
 
             #  back propegate and optimize
             loss.backward()
-            encoder_optimizer.step()
+            if not(pre_trained_encoder):
+                encoder_optimizer.step()
+
             CNN_optimizer.step()
 
             #  update tqdm description
@@ -73,16 +80,16 @@ def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data,
         train_losses.append(train_loss)
         dev_metrics.append(util.evaluate(dev_data, score, encoder, CNN))
         test_metrics.append(util.evaluate(test_data, score, encoder, CNN))
-        print "At end of epoch {}:"
-        print "The train loss is {}".format(epoch, train_loss)
+        print "At end of epoch {}:".format(epoch)
+        print "The train loss is {}".format(train_loss)
         print "The DEV MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(dev_metrics[-1][0], dev_metrics[-1][1], dev_metrics[-1][2], dev_metrics[-1][3])
         print "The TEST MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(test_metrics[-1][0], test_metrics[-1][1], test_metrics[-1][2], test_metrics[-1][3])
     return train_losses, dev_metrics, test_metrics
 
 
 def forward(idts, idbs, encoder, CNN):
-    xt = encoder(Variable(torch.from_numpy(idts)))
-    xb = encoder(Variable(torch.from_numpy(idbs)))
+    xt = encoder(idts)
+    xb = encoder(idbs)
     xt = xt.permute(1, 2, 0)
     xb = xb.permute(1, 2, 0)
     ot = CNN(xt)
@@ -94,7 +101,7 @@ def forward(idts, idbs, encoder, CNN):
 
 
 def normalize_2d(x, eps=1e-8):
-    l2 = torch.norm(x,p=2, dim=1,  keepdim=True)
+    l2 = torch.norm(x, p=2, dim=1,  keepdim=True)
     return x/(l2+eps)
 
 
