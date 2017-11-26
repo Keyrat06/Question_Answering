@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from collections import Counter
 from io import open
 import numpy as np
@@ -155,38 +156,39 @@ class data_loader():
         return triples
 
 
-# Data_loader = data_loader()
-# Data_loader = data_loader("data/text_tokenized.txt")
-
 class Encoder(nn.Module):
-    def __init__(self, input_size, embedding_dim):
+    def __init__(self, input_size, embedding_dim, padding_id):
         super(Encoder, self).__init__()
+        self.padding_id = padding_id
         self.embedding = nn.Embedding(input_size, embedding_dim)
 
     def forward(self, input):
         return self.embedding(input)
 
+
 class CNN(nn.Module):
     def __init__(self, embedding_dim, output_size, conv_width=4):
         super(CNN, self).__init__()
-        self.conv = nn.Conv1d(embedding_dim, output_size, conv_width, stride=1, padding=0, dilation=1, groups=1, bias=True)
+        self.conv_width = conv_width
+        self.output_size = output_size
+        self.conv = nn.Conv1d(embedding_dim, output_size, conv_width, stride=1, padding=(conv_width-1)/2, dilation=1, groups=1, bias=True)
 
     def forward(self, input):
-        conv = self.conv(input)
-        return torch.mean(conv, dim=input.dim()-1)
+        conv = F.relu(self.conv(input))
+        return conv
 
-class Evaluation():
-    def __init__(self,data):
+
+class Evaluation:
+    def __init__(self, data):
         self.data = data
 
-    def Precision(self,precision_at):
+    def Precision(self, precision_at):
         scores = []
         for item in self.data:
             temp = item[:precision_at]
             if any(val==1 for val in item):
                 scores.append(sum([1 if val==1 else 0 for val in temp])*1.0 / len(temp) if len(temp) > 0 else 0.0)
         return sum(scores)/len(scores) if len(scores) > 0 else 0.0
-
 
     def MAP(self):
         scores = []
@@ -204,7 +206,6 @@ class Evaluation():
                 missing_MAP += 1
         return sum(scores)/len(scores) if len(scores) > 0 else 0.0
 
-
     def MRR(self):
         scores = []
         for item in self.data:
@@ -213,3 +214,19 @@ class Evaluation():
                     scores.append(1.0/(i+1))
                     break
         return sum(scores)/len(scores) if len(scores) > 0 else 0.0
+
+
+def evaluate(data, score_func, encoder, CNN):
+    res = [ ]
+    for idts, idbs, labels in data:
+        scores = score_func(idts, idbs, encoder, CNN)
+        assert len(scores) == len(labels)
+        ranks = (-scores).argsort()
+        ranked_labels = labels[ranks]
+        res.append(ranked_labels)
+    e = Evaluation(res)
+    MAP = e.MAP()*100
+    MRR = e.MRR()*100
+    P1 = e.Precision(1)*100
+    P5 = e.Precision(5)*100
+    return MAP, MRR, P1, P5
