@@ -5,11 +5,12 @@ from tqdm import trange
 import numpy as np
 
 def main():
+    cuda = torch.cuda.is_available() and True
     embedding_size = 200
-    convolution_size = 5
-    CNN_size = 200
-    batch_size = 10
-    num_epoch = 5
+    convolution_size = 11
+    CNN_size = 100
+    batch_size = 5
+    num_epoch = 10
     padding = "<padding>"
     train_file = "data/train_random.txt"
     dev_file = "data/dev.txt"
@@ -20,29 +21,34 @@ def main():
     data_loader = util.data_loader(corpus_file, cut_off=2, padding=padding)
 
     # encoder = util.Encoder(data_loader.num_tokens, embedding_size, data_loader.vocab_map[padding])
-    pre_encoder = util.pre_embedded_Encoder(data_loader.vocab_map[padding], data_loader, embedding_path)
+    # if torch.cuda.is_available():
+    #     encoder = encoder.cuda()
+    pre_encoder = util.pre_embedded_Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, cuda)
     CNN = util.CNN(embedding_size, CNN_size, convolution_size)
+    if cuda:
+        CNN = CNN.cuda()
+
 
     dev  = data_loader.read_annotations(dev_file)
     dev_data  = data_loader.create_eval_batches(dev)
     test = data_loader.read_annotations(test_file)
     test_data = data_loader.create_eval_batches(test)
     train_data = data_loader.read_annotations(train_file)
-    # train_losses, dev_metrics, test_metrics = train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, False)
-    train_losses, dev_metrics, test_metrics = train(pre_encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size)
-    torch.save(encoder, "encoder.model")
+    # train_losses, dev_metrics, test_metrics = train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, False, cuda)
+    train_losses, dev_metrics, test_metrics = train(pre_encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, True, cuda)
+    # torch.save(encoder, "encoder.model")
     torch.save(CNN, "CNN.model")
     return train_losses, dev_metrics, test_metrics
 
 
-def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, pre_trained_encoder=True):
+def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, pre_trained_encoder=True, cuda=False):
     train_losses = []
     dev_metrics = []
     test_metrics = []
 
     # Say metrics as we start
-    dev_metrics.append(util.evaluate(dev_data, score, encoder, CNN))
-    test_metrics.append(util.evaluate(test_data, score, encoder, CNN))
+    dev_metrics.append(util.evaluate(dev_data, score, encoder, CNN, cuda))
+    test_metrics.append(util.evaluate(test_data, score, encoder, CNN, cuda))
     print "At the start of epoch"
     print "The DEV MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(dev_metrics[-1][0], dev_metrics[-1][1], dev_metrics[-1][2], dev_metrics[-1][3])
     print "The TEST MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(test_metrics[-1][0], test_metrics[-1][1], test_metrics[-1][2], test_metrics[-1][3])
@@ -64,7 +70,7 @@ def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data,
 
             #  get train batch and find current loss
             idts, idbs, idps = train_batches[i]
-            loss = get_loss(idts, idbs, idps, encoder, CNN)
+            loss = get_loss(idts, idbs, idps, encoder, CNN, cuda)
 
             #  back propegate and optimize
             loss.backward()
@@ -78,8 +84,8 @@ def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data,
             train_loss += loss.cpu().data[0]
 
         train_losses.append(train_loss)
-        dev_metrics.append(util.evaluate(dev_data, score, encoder, CNN))
-        test_metrics.append(util.evaluate(test_data, score, encoder, CNN))
+        dev_metrics.append(util.evaluate(dev_data, score, encoder, CNN, cuda))
+        test_metrics.append(util.evaluate(test_data, score, encoder, CNN, cuda))
         print "At end of epoch {}:".format(epoch)
         print "The train loss is {}".format(train_loss)
         print "The DEV MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(dev_metrics[-1][0], dev_metrics[-1][1], dev_metrics[-1][2], dev_metrics[-1][3])
@@ -87,17 +93,18 @@ def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data,
     return train_losses, dev_metrics, test_metrics
 
 
-def forward(idts, idbs, encoder, CNN):
+def forward(idts, idbs, encoder, CNN, cuda):
     xt = encoder(idts)
     xb = encoder(idbs)
     xt = xt.permute(1, 2, 0)
     xb = xb.permute(1, 2, 0)
     ot = CNN(xt)
     ob = CNN(xb)
-    ot = average_without_padding(ot, idts, encoder.padding_id)
-    ob = average_without_padding(ob, idbs, encoder.padding_id)
+    ot = average_without_padding(ot, idts, encoder.padding_id, cuda)
+    ob = average_without_padding(ob, idbs, encoder.padding_id, cuda)
     out = (ot+ob)*0.5
-    return normalize_2d(out)
+    out = normalize_2d(out)
+    return out
 
 
 def normalize_2d(x, eps=1e-8):
@@ -105,27 +112,37 @@ def normalize_2d(x, eps=1e-8):
     return x/(l2+eps)
 
 
-def average_without_padding(x, ids, padding_id, eps=1e-8):
-    mask = Variable(torch.from_numpy(np.not_equal(ids, padding_id).astype(int)[:,:,np.newaxis])).float().permute(1, 2, 0).expand_as(x)
+def average_without_padding(x, ids, padding_id, cuda=False, eps=1e-8):
+    if cuda:
+        mask = Variable(torch.from_numpy(np.not_equal(ids, padding_id).astype(int)[:,:,np.newaxis])).float().cuda().permute(1, 2, 0).expand_as(x)
+    else:
+        mask = Variable(torch.from_numpy(np.not_equal(ids, padding_id).astype(int)[:,:,np.newaxis])).float().permute(1, 2, 0).expand_as(x)
     s = torch.sum(x*mask, dim=2) / (torch.sum(mask, dim=2)+eps)
     return s
 
 
-def get_loss(idts, idbs, idps, encoder, CNN):
-    out = forward(idts, idbs, encoder, CNN)
-    out = out[torch.LongTensor(idps.ravel().astype(int))]
+def get_loss(idts, idbs, idps, encoder, CNN, cuda):
+    out = forward(idts, idbs, encoder, CNN, cuda)
+    if cuda:
+        out = out[torch.LongTensor(idps.ravel().astype(int)).cuda()]
+    else:
+        out = out[torch.LongTensor(idps.ravel().astype(int))]
     out = out.view((idps.shape[0], idps.shape[1], CNN.output_size))
-    query_vecs = out[:,0,:]
-    pos_scores = torch.sum(query_vecs*out[:,1,:], dim=1)
-    neg_scores = torch.sum(query_vecs.unsqueeze(1).expand_as(out[:,2:,:],) * out[:,2:,:], dim=2)
-    neg_scores = torch.max(neg_scores, dim=1)[0]
+    scores = torch.sum(out[:, 0, :].unsqueeze(1).expand_as(out[:, 1:, :],)*out[:, 1:, :], dim=2)
+    pos_scores = scores[:, 0]
+    neg_scores = torch.max(scores[:, 1:], dim=1)[0]
     diff = neg_scores - pos_scores + 1.0
-    loss = torch.mean((diff>0).type(torch.FloatTensor)*diff)
+    # skipping this since diff is alwayse > 0 since we normalize scores
+    # if cuda:
+    #     loss = torch.mean((diff>0).type(torch.cuda.FloatTensor)*diff)
+    # else:
+    #     loss = torch.mean((diff>0).type(torch.FloatTensor)*diff)
+    loss = torch.mean(diff)
     return loss
 
 
-def score(idts, idbs, encoder, CNN):
-    out = forward(idts, idbs, encoder, CNN)
+def score(idts, idbs, encoder, CNN, cuda):
+    out = forward(idts, idbs, encoder, CNN, cuda)
     scores = torch.sum(out[0].unsqueeze(0).expand_as(out[1:],)*out[1:], dim=1)
     return scores.cpu().data.numpy()
 

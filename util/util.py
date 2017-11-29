@@ -63,7 +63,7 @@ class data_loader():
         self.num_tokens = len(self.vocab_map)
 
 
-    def read_annotations(self, path, K_neg=20, prune_pos_cnt=10):
+    def read_annotations(self, path, K_neg=10, prune_pos_cnt=10):
         lst = [ ]
         with open(path) as fin:
             for line in fin:
@@ -145,9 +145,9 @@ class data_loader():
         padding_id = self.vocab_map[self.padding]
         max_title_len = max(1, max(len(x) for x in titles))
         max_body_len = max(1, max(len(x) for x in bodies))
-        titles = np.column_stack([ np.pad(x,(0,max_title_len-len(x)),'constant', \
+        titles = np.column_stack([ np.pad(x,(max_title_len-len(x),0),'constant', \
                                           constant_values=padding_id) for x in titles])
-        bodies = np.column_stack([ np.pad(x,(0,max_body_len-len(x)),'constant', \
+        bodies = np.column_stack([ np.pad(x,(max_body_len-len(x),0),'constant', \
                                           constant_values=padding_id) for x in bodies])
         return titles, bodies
 
@@ -165,17 +165,21 @@ class Encoder(nn.Module):
         self.embedding = nn.Embedding(input_size, embedding_dim)
 
     def forward(self, input):
-        return self.embedding(Variable(torch.from_numpy(input)))
+        if torch.cuda.is_available():
+            return self.embedding(Variable(torch.from_numpy(input)).cuda())
+        else:
+            self.embedding(Variable(torch.from_numpy(input)))
 
 
 class pre_embedded_Encoder():
-    def __init__(self, padding_id, data_loader, emb_path):
+    def __init__(self, padding_id, data_loader, emb_path, cuda):
+        self.cuda = cuda
         self.padding_id = padding_id
         self.embedding_size = 200
         self.embeddings = self.load_embedding_iterator(emb_path, data_loader)
 
     def load_embedding_iterator(self, path, data_loader):
-        embs = np.ones((len(data_loader.vocab_map), self.embedding_size))*0.001
+        embs = np.zeros((len(data_loader.vocab_map), self.embedding_size))
         with open(path) as fin:
             for line in fin:
                 line = line.strip()
@@ -194,20 +198,23 @@ class pre_embedded_Encoder():
         output = np.zeros((len(input), len(input[0]), self.embedding_size))
         for i in xrange(len(input)):
             for j in xrange(len(input[i])):
-                output[i,j] = self.embeddings[input[i, j]]
-        return Variable(torch.from_numpy(output)).float()
+                output[i, j] = self.embeddings[input[i, j]]
+        if self.cuda:
+            return Variable(torch.from_numpy(output), requires_grad=False).float().cuda()
+        else:
+            return Variable(torch.from_numpy(output)).float()
 
 
 
 class CNN(nn.Module):
-    def __init__(self, embedding_dim, output_size, conv_width=4):
+    def __init__(self, embedding_dim, output_size, conv_width):
         super(CNN, self).__init__()
         self.conv_width = conv_width
         self.output_size = output_size
         self.conv = nn.Conv1d(embedding_dim, output_size, conv_width, stride=1, padding=(conv_width-1)/2, dilation=1, groups=1, bias=True)
 
     def forward(self, input):
-        conv = F.relu(self.conv(input))
+        conv = F.tanh(self.conv(input))
         return conv
 
 
@@ -249,10 +256,10 @@ class Evaluation:
         return sum(scores)/len(scores) if len(scores) > 0 else 0.0
 
 
-def evaluate(data, score_func, encoder, CNN):
+def evaluate(data, score_func, encoder, CNN, cuda):
     res = [ ]
     for idts, idbs, labels in data:
-        scores = score_func(idts, idbs, encoder, CNN)
+        scores = score_func(idts, idbs, encoder, CNN, cuda)
         assert len(scores) == len(labels)
         ranks = (-scores).argsort()
         ranked_labels = labels[ranks]
