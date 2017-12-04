@@ -21,13 +21,12 @@ def main():
     data_loader = util.data_loader(corpus_file, cut_off=2, padding=padding)
 
     # encoder = util.Encoder(data_loader.num_tokens, embedding_size, data_loader.vocab_map[padding])
-    # if torch.cuda.is_available():
+    # if cuda:
     #     encoder = encoder.cuda()
-    pre_encoder = util.pre_embedded_Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, cuda)
+    pre_encoder = util.pre_trained_Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, cuda)
     CNN = util.CNN(embedding_size, CNN_size, convolution_size)
     if cuda:
         CNN = CNN.cuda()
-
 
     dev  = data_loader.read_annotations(dev_file)
     dev_data  = data_loader.create_eval_batches(dev)
@@ -45,6 +44,8 @@ def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data,
     train_losses = []
     dev_metrics = []
     test_metrics = []
+
+    cs = torch.nn.CosineSimilarity(dim=2)
 
     # Say metrics as we start
     dev_metrics.append(util.evaluate(dev_data, score, encoder, CNN, cuda))
@@ -70,7 +71,7 @@ def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data,
 
             #  get train batch and find current loss
             idts, idbs, idps = train_batches[i]
-            loss = get_loss(idts, idbs, idps, encoder, CNN, cuda)
+            loss = get_loss(idts, idbs, idps, encoder, CNN, cs, cuda)
 
             #  back propegate and optimize
             loss.backward()
@@ -82,6 +83,9 @@ def train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data,
             #  update tqdm description
             t.set_description("batch_loss: {}".format(loss.cpu().data[0]))
             train_loss += loss.cpu().data[0]
+
+            if i > 10:
+                break
 
         train_losses.append(train_loss)
         dev_metrics.append(util.evaluate(dev_data, score, encoder, CNN, cuda))
@@ -103,7 +107,6 @@ def forward(idts, idbs, encoder, CNN, cuda):
     ot = average_without_padding(ot, idts, encoder.padding_id, cuda)
     ob = average_without_padding(ob, idbs, encoder.padding_id, cuda)
     out = (ot+ob)*0.5
-    out = normalize_2d(out)
     return out
 
 
@@ -121,29 +124,24 @@ def average_without_padding(x, ids, padding_id, cuda=False, eps=1e-8):
     return s
 
 
-def get_loss(idts, idbs, idps, encoder, CNN, cuda):
+def get_loss(idts, idbs, idps, encoder, CNN, cs, cuda):
     out = forward(idts, idbs, encoder, CNN, cuda)
     if cuda:
         out = out[torch.LongTensor(idps.ravel().astype(int)).cuda()]
     else:
         out = out[torch.LongTensor(idps.ravel().astype(int))]
     out = out.view((idps.shape[0], idps.shape[1], CNN.output_size))
-    scores = torch.sum(out[:, 0, :].unsqueeze(1).expand_as(out[:, 1:, :],)*out[:, 1:, :], dim=2)
+    scores = cs(out[:, 0, :].unsqueeze(1).expand_as(out[:, 1:, :],), out[:, 1:, :])
     pos_scores = scores[:, 0]
     neg_scores = torch.max(scores[:, 1:], dim=1)[0]
     diff = neg_scores - pos_scores + 1.0
-    # skipping this since diff is alwayse > 0 since we normalize scores
-    # if cuda:
-    #     loss = torch.mean((diff>0).type(torch.cuda.FloatTensor)*diff)
-    # else:
-    #     loss = torch.mean((diff>0).type(torch.FloatTensor)*diff)
     loss = torch.mean(diff)
     return loss
 
 
-def score(idts, idbs, encoder, CNN, cuda):
+def score(idts, idbs, encoder, CNN, cs, cuda):
     out = forward(idts, idbs, encoder, CNN, cuda)
-    scores = torch.sum(out[0].unsqueeze(0).expand_as(out[1:],)*out[1:], dim=1)
+    scores = cs(out[0].unsqueeze(0).expand_as(out[1:],), out[1:])
     return scores.cpu().data.numpy()
 
 

@@ -171,7 +171,9 @@ class Encoder(nn.Module):
             self.embedding(Variable(torch.from_numpy(input)))
 
 
-class pre_embedded_Encoder():
+class pre_trained_Encoder():
+
+    @timeit
     def __init__(self, padding_id, data_loader, emb_path, cuda):
         self.cuda = cuda
         self.padding_id = padding_id
@@ -202,7 +204,7 @@ class pre_embedded_Encoder():
         if self.cuda:
             return Variable(torch.from_numpy(output), requires_grad=False).float().cuda()
         else:
-            return Variable(torch.from_numpy(output)).float()
+            return Variable(torch.from_numpy(output), requires_grad=False).float()
 
 
 
@@ -257,9 +259,10 @@ class Evaluation:
 
 
 def evaluate(data, score_func, encoder, CNN, cuda):
+    cs = nn.CosineSimilarity(dim=1)
     res = [ ]
     for idts, idbs, labels in data:
-        scores = score_func(idts, idbs, encoder, CNN, cuda)
+        scores = score_func(idts, idbs, encoder, CNN, cs, cuda)
         assert len(scores) == len(labels)
         ranks = (-scores).argsort()
         ranked_labels = labels[ranks]
