@@ -7,6 +7,7 @@ from io import open
 import numpy as np
 import random
 import time
+from tqdm import trange
 
 
 def timeit(method):
@@ -63,7 +64,7 @@ class data_loader():
         self.num_tokens = len(self.vocab_map)
 
 
-    def read_annotations(self, path, K_neg=10, prune_pos_cnt=10):
+    def read_annotations(self, path, K_neg=10, prune_pos_cnt=3):
         lst = [ ]
         with open(path) as fin:
             for line in fin:
@@ -230,8 +231,8 @@ class LSTM(nn.Module):
 
 
     def forward(self, input):
-        out = self.lstm(input)[0][-1]
-        return out
+        out = self.lstm(input)[0]
+        return F.tanh(out)
 
 
 class Evaluation:
@@ -321,3 +322,64 @@ def evaluate(data, score_func, encoder, model, cuda, forward):
     P1 = e.Precision(1)*100
     P5 = e.Precision(5)*100
     return MAP, MRR, P1, P5
+
+def train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, pre_trained_encoder=True, cuda=False, LR=0.001):
+    train_losses = []
+    dev_metrics = []
+    test_metrics = []
+
+    cs = torch.nn.CosineSimilarity(dim=2)
+    print("doing evaluations")
+    # Say metrics as we start
+    dev_metrics.append(evaluate(dev_data, score, encoder, model, cuda, forward))
+    test_metrics.append(evaluate(test_data, score, encoder, model, cuda, forward))
+    print "At the start of epoch"
+    print "The DEV MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(dev_metrics[-1][0], dev_metrics[-1][1], dev_metrics[-1][2], dev_metrics[-1][3])
+    print "The TEST MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(test_metrics[-1][0], test_metrics[-1][1], test_metrics[-1][2], test_metrics[-1][3])
+    if not(pre_trained_encoder):
+        encoder_optimizer = torch.optim.Adam(encoder.parameters(), LR, weight_decay=0.0)
+
+    model_optimizer = torch.optim.Adam(model.parameters(), LR, weight_decay=0.0)
+    for epoch in xrange(num_epoch):
+        print "Training epoch {}".format(epoch)
+        train_batches = data_loader.create_batches(train_data, batch_size)
+        N = len(train_batches)
+        train_loss = 0.0
+        t = trange(N, desc='batch_loss: ??')
+        for i in t:
+            #  reset gradients
+            model_optimizer.zero_grad()
+            if not(pre_trained_encoder):
+                encoder_optimizer.zero_grad()
+
+            #  get train batch and find current loss
+            idts, idbs, idps = train_batches[i]
+
+            out = forward(idts, idbs, encoder, model, cuda)
+            loss = get_loss(out, idps, model, cs, cuda)
+
+            try:
+                #  back propegate and optimize
+                loss.backward()
+                if not(pre_trained_encoder):
+                    encoder_optimizer.step()
+
+                model_optimizer.step()
+
+                #  update tqdm description
+                t.set_description("batch_loss: {}".format(loss.cpu().data[0]))
+                train_loss += loss.cpu().data[0]
+            except:
+                print idts, idbs, idps
+                continue
+
+
+
+        train_losses.append(train_loss)
+        dev_metrics.append(evaluate(dev_data, score, encoder, model, cuda, forward))
+        test_metrics.append(evaluate(test_data, score, encoder, model, cuda, forward))
+        print "At end of epoch {}:".format(epoch)
+        print "The train loss is {}".format(train_loss)
+        print "The DEV MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(dev_metrics[-1][0], dev_metrics[-1][1], dev_metrics[-1][2], dev_metrics[-1][3])
+        print "The TEST MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(test_metrics[-1][0], test_metrics[-1][1], test_metrics[-1][2], test_metrics[-1][3])
+    return train_losses, dev_metrics, test_metrics
