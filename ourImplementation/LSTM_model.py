@@ -19,35 +19,6 @@ sys.path.append("/home/sepiatone/at/6_864-qa")
 from util import util
 
 
-#%%
-
-# Stuff from util.py
-
-#class data_loader():
-#    def __init__(self, data_file="../data/text_tokenized.txt", unk="<unk>",\
-#                 padding="<padding>", start="<s>", end="</s>", cut_off=2):
-#        
-#        print("data_loader()")
-#        return 0
-#    
-#    def read_annotations(self, path, K_neg=10, prune_pos_cnt=10):
-#        print("read_annotations()")
-#        return 0
-#
-#    
-#class pre_embedded_Encoder():
-#    def __init__(self, padding_id, data_loader, emb_path, cuda):
-#        self.embeddings = self.load_embedding_iterator(emb_path, data_loader)
-#
-#    def load_embedding_iterator(self, path, data_loader):
-#        print("load_embedding_iterator()")
-#        return 0
-#    
-
-#%%
-
-# Should go to util.py
-
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -73,15 +44,15 @@ class LSTM(nn.Module):
 
 #%%
 
-corpus_file = "../data/text_tokenized.txt"
+corpus_file = "data/text_tokenized.txt"
 padding = "<padding>"
-embedding_path = "../data/vectors_pruned.200.txt"
+embedding_path = "data/vectors_pruned.200.txt"
 input_size = 100 # Check
-hidden_size = 240
+hidden_size = 200
 output_size = 100
-dev_file = "../data/dev.txt"
-test_file = "../data/test.txt"
-train_file = "../data/train_random.txt"
+dev_file = "data/dev.txt"
+test_file = "data/test.txt"
+train_file = "data/train_random.txt"
 num_epoch = 10
 batch_size = 1
 
@@ -102,7 +73,7 @@ def main():
     train_data = data_loader.read_annotations(train_file)
     
     # Utilize an exisiting vector representation of the words
-    pre_encoder = util.pre_embedded_Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, cuda)
+    pre_encoder = util.pre_trained_Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, cuda)
     
     print "Embeddings done"
     
@@ -110,7 +81,7 @@ def main():
     if cuda:
         model = model.cuda()
 
-    train_losses, dev_metrics, test_metrics = train(pre_encoder, model, data_loader, True, cuda)
+    train_losses, dev_metrics, test_metrics = train(pre_encoder, model, data_loader, num_epoch, train_data, dev_data, test_data, batch_size, True, cuda)
 
     torch.save(model, "LSTM.model")
     
@@ -119,14 +90,14 @@ def main():
 
 #%%
 
-def train(encoder, model, data_loader, pre_trained_encoder = True, cuda = False):
+def train(encoder, model, data_loader, num_epoch, train_data, dev_data, test_data, batch_size, pre_trained_encoder = True, cuda = False):
     train_losses = []
     dev_metrics = []
     test_metrics = []
     
     # Note - gather metrics before we start training
-    dev_metrics.append(util.evaluate(dev_data, score, encoder, CNN, cuda))
-    test_metrics.append(util.evaluate(test_data, score, encoder, CNN, cuda))
+    dev_metrics.append(util.evaluate(dev_data, score, encoder, model, cuda))
+    test_metrics.append(util.evaluate(test_data, score, encoder, model, cuda))
     print "At the start of epoch"
     print "The DEV MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(dev_metrics[-1][0], dev_metrics[-1][1], dev_metrics[-1][2], dev_metrics[-1][3])
     print "The TEST MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(test_metrics[-1][0], test_metrics[-1][1], test_metrics[-1][2], test_metrics[-1][3])
@@ -170,7 +141,7 @@ def train(encoder, model, data_loader, pre_trained_encoder = True, cuda = False)
             optimizer.step()
     
             #  update tqdm description
-            #t.set_description("batch_loss: {}".format(loss.cpu().data[0]))
+            t.set_description("batch_loss: {}".format(loss.cpu().data[0]))
             train_loss += loss.cpu().data[0]
         
         # Gather statistics at the end of an epoch
@@ -234,7 +205,7 @@ def average_without_padding(x, ids, padding_id, cuda=False, eps=1e-8):
     return s
 
 
-def score(idts, idbs, encoder, model, cuda):
+def score(idts, idbs, encoder, model, cs, cuda):
     out = forward(idts, idbs, encoder, model, cuda)
     scores = torch.sum(out[0].unsqueeze(0).expand_as(out[1:],)*out[1:], dim=1)
     return scores.cpu().data.numpy()
