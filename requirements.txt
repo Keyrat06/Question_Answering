@@ -1,0 +1,5 @@
+numpy
+pytorch
+gensim
+tqdm
+sklearn
