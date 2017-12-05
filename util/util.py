@@ -219,6 +219,20 @@ class CNN(nn.Module):
         conv = F.tanh(self.conv(input))
         return conv
 
+class LSTM(nn.Module):
+    def __init__(self, input_size, output_size, depth=1):
+        super(LSTM, self).__init__()
+        self.output_size = output_size
+        self.input_size = input_size
+
+        # The LSTM takes word encodings as inputs, and outputs hidden states with dimensionality hidden_dim.
+        self.lstm = nn.LSTM(self.input_size, self.output_size, depth)
+
+
+    def forward(self, input):
+        out = self.lstm(input)[0][-1]
+        return out
+
 
 class Evaluation:
     def __init__(self, data):
@@ -258,11 +272,45 @@ class Evaluation:
         return sum(scores)/len(scores) if len(scores) > 0 else 0.0
 
 
-def evaluate(data, score_func, encoder, CNN, cuda):
+def normalize_2d(x, eps=1e-8):
+    l2 = torch.norm(x, p=2, dim=1,  keepdim=True)
+    return x/(l2+eps)
+
+
+def average_without_padding(x, ids, padding_id, cuda=False, eps=1e-8):
+    if cuda:
+        mask = Variable(torch.from_numpy(np.not_equal(ids, padding_id).astype(int)[:,:,np.newaxis])).float().cuda().permute(1, 2, 0).expand_as(x)
+    else:
+        mask = Variable(torch.from_numpy(np.not_equal(ids, padding_id).astype(int)[:,:,np.newaxis])).float().permute(1, 2, 0).expand_as(x)
+    s = torch.sum(x*mask, dim=2) / (torch.sum(mask, dim=2)+eps)
+    return s
+
+
+def get_loss(out, idps, model, cs, cuda):
+    if cuda:
+        out = out[torch.LongTensor(idps.ravel().astype(int)).cuda()]
+    else:
+        out = out[torch.LongTensor(idps.ravel().astype(int))]
+    out = out.view((idps.shape[0], idps.shape[1], model.output_size))
+    scores = cs(out[:, 0, :].unsqueeze(1).expand_as(out[:, 1:, :],), out[:, 1:, :])
+    pos_scores = scores[:, 0]
+    neg_scores = torch.max(scores[:, 1:], dim=1)[0]
+    diff = neg_scores - pos_scores + 1.0
+    loss = torch.mean(diff)
+    return loss
+
+
+def score(idts, idbs, forward, encoder, model, cs, cuda):
+    out = forward(idts, idbs, encoder, model, cuda)
+    scores = cs(out[0].unsqueeze(0).expand_as(out[1:],), out[1:])
+    return scores.cpu().data.numpy()
+
+
+def evaluate(data, score_func, encoder, model, cuda, forward):
     cs = nn.CosineSimilarity(dim=1)
     res = [ ]
     for idts, idbs, labels in data:
-        scores = score_func(idts, idbs, encoder, CNN, cs, cuda)
+        scores = score_func(idts, idbs, forward, encoder, model, cs, cuda)
         assert len(scores) == len(labels)
         ranks = (-scores).argsort()
         ranked_labels = labels[ranks]
