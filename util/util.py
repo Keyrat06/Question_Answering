@@ -2,12 +2,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from collections import Counter
 from io import open
 import numpy as np
 import random
 import time
-from tqdm import trange
+from tqdm import trange, tqdm
+from collections import Counter, defaultdict
+import math
+
 
 
 def timeit(method):
@@ -158,6 +160,48 @@ class data_loader():
                               for x in triples ]).astype('int32')
         return triples
 
+def read_annotations_2(pos_path, neg_path, K_neg=10, prune_pos_cnt=3):
+    q_2_pos = defaultdict(list)
+    q_2_neg = defaultdict(list)
+    with open(pos_path) as fin:
+        for line in fin:
+            parts = line.strip("\n").split(" ")
+            if len(parts) != 2:
+                continue
+            q_2_pos[parts[0]] = q_2_pos[parts[0]] + [parts[1]]
+
+    with open(neg_path) as fin:
+        for line in fin:
+            parts = line.strip("\n").split(" ")
+            if len(parts) != 2:
+                continue
+            q_2_neg[parts[0]] = q_2_neg[parts[0]] + [parts[1]]
+
+    lst = []
+    for id in q_2_pos:
+        neg = q_2_neg[id]
+        if K_neg != -1:
+            random.shuffle(neg)
+            neg = neg[:K_neg]
+        pos = q_2_pos[id]
+        if len(pos) > prune_pos_cnt and prune_pos_cnt != -1: continue
+
+        s = set()
+        qids = [ ]
+        qlabels = [ ]
+        for q in pos:
+            if q not in s:
+                qids.append(q)
+                qlabels.append(0 if q not in pos else 1)
+                s.add(q)
+        for q in neg:
+            if q not in s:
+                qids.append(q)
+                qlabels.append(0 if q not in pos else 1)
+                s.add(q)
+        lst.append((id, qids, qlabels))
+    return lst
+
 
 class Encoder(nn.Module):
     def __init__(self, input_size, embedding_dim, padding_id):
@@ -223,11 +267,11 @@ class CNN(nn.Module):
 class LSTM(nn.Module):
     def __init__(self, input_size, output_size, depth=1):
         super(LSTM, self).__init__()
-        self.output_size = output_size
+        self.output_size = output_size//2
         self.input_size = input_size
 
         # The LSTM takes word encodings as inputs, and outputs hidden states with dimensionality hidden_dim.
-        self.lstm = nn.LSTM(self.input_size, self.output_size, depth)
+        self.lstm = nn.LSTM(self.input_size, self.output_size, depth, bidirectional=True)
 
 
     def forward(self, input):
@@ -323,6 +367,36 @@ def evaluate(data, score_func, encoder, model, cuda, forward):
     P5 = e.Precision(5)*100
     return MAP, MRR, P1, P5
 
+def evaluate_BM25(data, model):
+    res = []
+    for question, possibilities, labels in data:
+        scores = model.BM25Score(question, possibilities)
+        assert len(scores) == len(labels)
+        ranks = (-scores).argsort()
+        ranked_labels = labels[ranks]
+        res.append(ranked_labels)
+        e = Evaluation(res)
+    MAP = e.MAP()*100
+    MRR = e.MRR()*100
+    P1 = e.Precision(1)*100
+    P5 = e.Precision(5)*100
+    return MAP, MRR, P1, P5
+
+def evaluate_TFIDF(data, model):
+    res = []
+    for question, possibilities, labels in data:
+        scores = model.TFIDFScore(question, possibilities)
+        assert len(scores) == len(labels)
+        ranks = (-scores).argsort()
+        ranked_labels = labels[ranks]
+        res.append(ranked_labels)
+        e = Evaluation(res)
+    MAP = e.MAP()*100
+    MRR = e.MRR()*100
+    P1 = e.Precision(1)*100
+    P5 = e.Precision(5)*100
+    return MAP, MRR, P1, P5
+
 def train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, pre_trained_encoder=True, cuda=False, LR=0.001):
     train_losses = []
     dev_metrics = []
@@ -383,3 +457,59 @@ def train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_dat
         print "The DEV MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(dev_metrics[-1][0], dev_metrics[-1][1], dev_metrics[-1][2], dev_metrics[-1][3])
         print "The TEST MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(test_metrics[-1][0], test_metrics[-1][1], test_metrics[-1][2], test_metrics[-1][3])
     return train_losses, dev_metrics, test_metrics
+
+
+class BM25_TDIDF:
+    def __init__(self, data_file, delimiter='\t'):
+        self.doc_term_counter = defaultdict(lambda: 0)
+        self.documents = dict()
+        self.document_lengths = dict()
+        self.total_lengths = 0
+        self.N = 0
+        with open(data_file) as data:
+            for line in tqdm(data):
+                id, title, body = line.split(delimiter)
+                if len(title) == 0:
+                    continue
+                title = title.strip().split()
+                body = body.strip().split()
+                text = title + body
+                self.documents[id] = Counter(text)
+                for term in self.documents[id]:
+                    self.doc_term_counter[term] += 1
+                self.document_lengths[id] = len(text)
+                self.total_lengths += len(text)
+                self.N += 1
+        self.avg_len = self.total_lengths/float(self.N)
+        self.BMIDF = dict()
+        self.TFIDF = dict()
+        for term in self.doc_term_counter:
+            self.BMIDF[term] = math.log((self.N - self.doc_term_counter[term] + 0.5) / (self.doc_term_counter[term] + 0.5))
+            self.TFIDF[term] = math.log((self.N)/(self.doc_term_counter[term]+1))+1
+
+
+    def BM25Score(self, q1, q2s, k1=1.5, b=0.75):
+        scores = []
+        for q2 in q2s:
+            doc = self.documents[q2]
+            commonTerms = set(self.documents[q1]) & set(doc)
+            tmp_score = []
+            doc_terms_len = self.document_lengths[q2]
+            for term in commonTerms:
+                upper = (doc[term] * (k1+1))
+                below = ((doc[term]) + k1*(1 - b + b*doc_terms_len/self.avg_len))
+                tmp_score.append(self.BMIDF[term] * upper / below)
+            scores.append(sum(tmp_score))
+        return scores
+
+    def TFIDFScore(self, q1, q2s):
+        scores = []
+        for q2 in q2s:
+            doc = self.documents[q2]
+            commonTerms = set(self.documents[q1]) & set(doc)
+            tmp_score = []
+            doc_terms_len = self.document_lengths[q2]
+            for term in commonTerms:
+                tmp_score.append(self.TFIDF[term] * math.sqrt(doc[term]) * 1.0/math.sqrt(doc_terms_len))
+            scores.append(sum(tmp_score))
+        return scores
