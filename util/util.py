@@ -293,7 +293,7 @@ def get_loss(out, idps, model, cs, cuda):
     else:
         out = out[torch.LongTensor(idps.ravel().astype(int))]
     out = out.view((idps.shape[0], idps.shape[1], model.output_size))
-    scores = cs(out[:, 0, :].unsqueeze(1).expand_as(out[:, 1:, :],), out[:, 1:, :])
+    scores = cs(out[:, 0, :].unsqueeze(1).expand_as(out[:, 1:, :],), out[:, 1:, :]).view(-1, len(out[0])-1)
     pos_scores = scores[:, 0]
     neg_scores = torch.max(scores[:, 1:], dim=1)[0]
     diff = neg_scores - pos_scores + 1.0
@@ -355,10 +355,10 @@ def train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_dat
             #  get train batch and find current loss
             idts, idbs, idps = train_batches[i]
 
-            out = forward(idts, idbs, encoder, model, cuda)
-            loss = get_loss(out, idps, model, cs, cuda)
-
             try:
+                out = forward(idts, idbs, encoder, model, cuda)
+                loss = get_loss(out, idps, model, cs, cuda)
+
                 #  back propegate and optimize
                 loss.backward()
                 if not(pre_trained_encoder):

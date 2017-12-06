@@ -11,9 +11,10 @@ def main():
     # Check if a GPU is available
     cuda = torch.cuda.is_available() and True
     num_epoch = 40
-    batch_size = 3
+    batch_size = 2
     input_size = 200
     output_size = 240
+    LR = 0.0005
     dev_file = "data/dev.txt"
     test_file = "data/test.txt"
     train_file = "data/train_random.txt"
@@ -30,7 +31,7 @@ def main():
     dev_data  = data_loader.create_eval_batches(dev)
     test = data_loader.read_annotations(test_file, 20, 10)
     test_data = data_loader.create_eval_batches(test)
-    train_data = data_loader.read_annotations(train_file, 10, 3)
+    train_data = data_loader.read_annotations(train_file, 15, 3)
     
     # Utilize an exisiting vector representation of the words
     encoder = util.pre_trained_Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, cuda)
@@ -42,7 +43,7 @@ def main():
         model = model.cuda()
 
 
-    train_losses, dev_metrics, test_metrics = util.train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, True, cuda)
+    train_losses, dev_metrics, test_metrics = util.train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, True, cuda, LR)
     torch.save(model, "LSTM.model")
     
     return train_losses, dev_metrics, test_metrics
