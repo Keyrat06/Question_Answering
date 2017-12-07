@@ -58,80 +58,9 @@ def main():
 
 
 
-    dev_metrics, test_metrics = advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, cuda)
+    train_losses, dev_metrics, test_metrics = util.advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, cuda)
 
-    return dev_metrics, test_metrics
-
-
-def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, cuda, LR=0.001):
-    train_losses = []
-    dev_metrics = []
-    test_metrics = []
-    L = 10**-3
-    cs = torch.nn.CosineSimilarity(dim=2)
-    # print("doing evaluations (This takes a while :()")
-    # dev_metrics.append(util.evaluate_AUC(dev_data, util.score, encoder, model, False, forward))
-    # test_metrics.append(util.evaluate_AUC(test_data, util.score, encoder, model, False, forward))
-    # print("dev AUC(0.05) score : {}".format(dev_metrics[-1]))
-    # print("test AUC(0.05) score : {}".format(test_metrics[-1]))
-
-    criterion = nn.BCEWithLogitsLoss()
-
-    model_optimizer = torch.optim.Adam(model.parameters(), LR, weight_decay=0.0)
-    classifier_optimizer = torch.optim.Adam(classifier.parameters(), -100 * LR, weight_decay=0.0)
-    for epoch in xrange(num_epoch):
-        print "Training epoch {}".format(epoch)
-        train_batches = data_loader.create_batches(train_data, batch_size)
-        N = len(train_batches)
-        train_loss = 0.0
-        t = trange(N, desc='batch_loss: ??')
-        for i in t:
-            model_optimizer.zero_grad()
-            classifier_optimizer.zero_grad()
-
-            idts, idbs, idps = train_batches[i]
-            out = forward(idts, idbs, encoder, model, cuda)
-
-            loss_1 = util.get_loss(out, idps, model, cs, cuda)
-
-            M = len(idts[0])
-
-            advisarial_idts, advisarial_idbs = data_loader.create_advisarial_data(M)
-            advisarial_out = forward(advisarial_idts, advisarial_idbs, encoder, model, cuda)
-
-            samples = np.random.choice(range(2*M), M, replace=False)
-
-            if cuda:
-                Xs = torch.cat((out, advisarial_out))[torch.LongTensor(samples).cuda()]
-                Ys = torch.autograd.Variable(torch.from_numpy(np.array([i < M for i in samples], dtype=int)).float()).cuda()
-            else:
-                Xs = torch.cat((out, advisarial_out))[torch.LongTensor(samples)]
-                Ys = torch.autograd.Variable(torch.from_numpy(np.array([i < M for i in samples], dtype=int)).float())
-
-            out = classifier(Xs).view(-1)
-            print out
-            loss_2 = criterion(out, Ys)
-
-            loss = loss_1 - L * loss_2
-            loss.backward()
-
-            print loss_2
-            print loss_1
-
-            model_optimizer.step()
-            classifier_optimizer.step()
-            t.set_description("batch_loss: {}, qa_loss: {}, advisarial_loss: {}".format(loss.cpu().data[0], loss_1.cpu().data[0], loss_2.cpu().data[0]))
-            train_loss += loss.cpu().data[0]
-
-        train_losses.append(train_loss)
-        dev_metrics.append(util.evaluate(dev_data, util.score, encoder, model, cuda, forward))
-        test_metrics.append(util.evaluate(test_data, util.score, encoder, model, cuda, forward))
-        print "At end of epoch {}:".format(epoch)
-        print "The train loss is {}".format(train_loss)
-        print "The DEV MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(dev_metrics[-1][0], dev_metrics[-1][1], dev_metrics[-1][2], dev_metrics[-1][3])
-        print "The TEST MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(test_metrics[-1][0], test_metrics[-1][1], test_metrics[-1][2], test_metrics[-1][3])
     return train_losses, dev_metrics, test_metrics
-
 
 
 
