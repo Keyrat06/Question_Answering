@@ -143,26 +143,44 @@ class data_loader():
                 self.raw_corpus[id] = (title, body)
         self.vocab = Counter(w for id, pair in self.raw_corpus.iteritems() \
                                    for x in pair for w in x)
+        self.cut_off = cut_off
         self.unk = unk
         self.padding = padding
         self.start = start
         self.end = end
-        self.vocab[unk] = cut_off + 1
-        self.vocab[padding] = cut_off + 1
-        self.vocab[start] = cut_off + 1
-        self.vocab[end] = cut_off + 1
+        self.vocab[self.unk] = self.cut_off + 1
+        self.vocab[self.padding] = self.cut_off + 1
+        self.vocab[self.start] = self.cut_off + 1
+        self.vocab[self.end] = self.cut_off + 1
         self.vocab_map = {}
         for word in self.vocab:
-            if self.vocab[word] <= cut_off: word = unk
+            if self.vocab[word] <= self.cut_off: word = unk
             if word not in self.vocab_map:
                 self.vocab_map[word] = len(self.vocab_map)
 
         self.mapped_corpus = {}
         for id in self.raw_corpus:
-            mapped_title = [self.vocab_map.get(word, self.vocab_map[unk]) for word in self.raw_corpus[id][0]]
-            mapped_body = [self.vocab_map.get(word, self.vocab_map[unk]) for word in self.raw_corpus[id][1]]
+            mapped_title = [self.vocab_map.get(word, self.vocab_map[self.unk]) for word in self.raw_corpus[id][0]]
+            mapped_body = [self.vocab_map.get(word, self.vocab_map[self.unk]) for word in self.raw_corpus[id][1]]
             self.mapped_corpus[id] = (mapped_title, mapped_body)
         self.num_tokens = len(self.vocab_map)
+
+    def read_new_corpus(self, data_file):
+        self.second_raw_corpus = {}
+        with open(data_file) as data:
+            for line in data:
+                id, title, body = line.split("\t")
+                if len(title) == 0:
+                    continue
+                title = title.strip().split()
+                body = body.strip().split()
+                self.second_raw_corpus[id] = (title, body)
+
+        self.mapped_corpus_2 = {}
+        for id in self.second_raw_corpus:
+            mapped_title = [self.vocab_map.get(word, self.vocab_map[self.unk]) for word in self.second_raw_corpus[id][0]]
+            mapped_body = [self.vocab_map.get(word, self.vocab_map[self.unk]) for word in self.second_raw_corpus[id][1]]
+            self.mapped_corpus_2[id] = (mapped_title, mapped_body)
 
     @staticmethod
     def read_annotations(path, K_neg=10, prune_pos_cnt=3):
@@ -230,13 +248,31 @@ class data_loader():
                 cnt = 0
         return batches
 
-    def create_eval_batches(self, data):
+
+    def create_advisarial_data(self, N):
+        ids = self.mapped_corpus_2.keys()
+        ids = np.random.choice(ids, N, replace=False)
+        titles = []
+        bodies = []
+        for id in ids:
+            t, b = self.mapped_corpus_2[id]
+            titles.append(t)
+            bodies.append(b)
+        titles, bodies = self.create_one_batch(titles, bodies)
+        return titles, bodies
+
+
+
+    def create_eval_batches(self, data, first_corpus=True):
         lst = [ ]
         for pid, qids, qlabels in data:
             titles = [ ]
             bodies = [ ]
             for id in [pid]+qids:
-                t, b = self.mapped_corpus[id]
+                if first_corpus:
+                    t, b = self.mapped_corpus[id]
+                else:
+                    t, b = self.mapped_corpus_2[id]
                 titles.append(t)
                 bodies.append(b)
             titles, bodies = self.create_one_batch(titles, bodies)
@@ -361,6 +397,20 @@ class CNN(nn.Module):
         conv = F.tanh(self.conv(input))
         return conv
 
+
+def CNN_forward(idts, idbs, encoder, CNN, cuda=False):
+    xt = encoder(idts)
+    xb = encoder(idbs)
+    xt = xt.permute(1, 2, 0)
+    xb = xb.permute(1, 2, 0)
+    ot = CNN(xt)
+    ob = CNN(xb)
+    ot = average_without_padding(ot, idts, encoder.padding_id, cuda)
+    ob = average_without_padding(ob, idbs, encoder.padding_id, cuda)
+    out = (ot+ob)*0.5
+    return out
+
+
 class LSTM(nn.Module):
     def __init__(self, input_size, output_size, depth=1):
         super(LSTM, self).__init__()
@@ -375,6 +425,32 @@ class LSTM(nn.Module):
     def forward(self, input):
         out = self.lstm(input)[0]
         return F.tanh(out)
+
+def LSTM_forward(idts, idbs, encoder, model, cuda=False):
+    xt = encoder(idts)
+    xb = encoder(idbs)
+    ot = model(xt)
+    ob = model(xb)
+    ot = ot.permute(1,2,0)
+    ob = ob.permute(1,2,0)
+    ot = average_without_padding(ot, idts, encoder.padding_id, cuda)
+    ob = average_without_padding(ob, idbs, encoder.padding_id, cuda)
+    out = (ot+ob)*0.5
+    return out
+
+class Classifier(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(Classifier, self).__init__()
+        self.i2h = nn.Linear(input_size, hidden_size)
+        self.h2o = nn.Linear(hidden_size, 1)
+        # self.softmax = nn.Sig()
+
+    def forward(self, x):
+        hidden = self.i2h(x)
+        hidden = F.tanh(hidden)
+        output = self.h2o(hidden)
+        # output = F.sigmoid(output)
+        return output
 
 
 class Evaluation:
@@ -446,7 +522,8 @@ def get_loss(out, idps, model, cs, cuda):
 def score(idts, idbs, forward, encoder, model, cs, cuda):
     out = forward(idts, idbs, encoder, model, cuda)
     scores = cs(out[0].unsqueeze(0).expand_as(out[1:],), out[1:])
-    return scores.cpu().data.numpy()
+    scores = scores.cpu().data.numpy()
+    return scores
 
 
 def evaluate(data, score_func, encoder, model, cuda, forward):
@@ -465,37 +542,36 @@ def evaluate(data, score_func, encoder, model, cuda, forward):
     P5 = e.Precision(5)*100
     return MAP, MRR, P1, P5
 
-def evaluate_BM25(data, model):
-    res = []
+def evaluate_AUC(data, score_func, encoder, model, cuda, forward):
+    cs = nn.CosineSimilarity(dim=1)
+    AUC = AUCMeter()
+    AUC.reset()
+    for idts, idbs, labels in data:
+        scores = score_func(idts, idbs, forward, encoder, model, cs, cuda)
+        assert len(scores) == len(labels)
+        AUC.add(scores, labels)
+    return AUC.value(0.05)
+
+
+def evaluate_BM25_AUC(data, model):
+    AUC = AUCMeter()
+    AUC.reset()
     for question, possibilities, labels in data:
         labels = np.array(labels)
         scores = model.BM25Score(question, possibilities)
         assert len(scores) == len(labels)
-        ranks = (-scores).argsort()
-        ranked_labels = labels[ranks]
-        res.append(ranked_labels)
-        e = Evaluation(res)
-    MAP = e.MAP()*100
-    MRR = e.MRR()*100
-    P1 = e.Precision(1)*100
-    P5 = e.Precision(5)*100
-    return MAP, MRR, P1, P5
+        AUC.add(scores, labels)
+    return AUC.value(0.05)
 
-def evaluate_TFIDF(data, model):
-    res = []
+def evaluate_TFIDF_AUC(data, model):
+    AUC = AUCMeter()
+    AUC.reset()
     for question, possibilities, labels in data:
         labels = np.array(labels)
         scores = model.TFIDFScore(question, possibilities)
         assert len(scores) == len(labels)
-        ranks = (-scores).argsort()
-        ranked_labels = labels[ranks]
-        res.append(ranked_labels)
-        e = Evaluation(res)
-    MAP = e.MAP()*100
-    MRR = e.MRR()*100
-    P1 = e.Precision(1)*100
-    P5 = e.Precision(5)*100
-    return MAP, MRR, P1, P5
+        AUC.add(scores, labels)
+    return AUC.value(0.05)
 
 def train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, pre_trained_encoder=True, cuda=False, LR=0.001):
     train_losses = []
@@ -547,8 +623,6 @@ def train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_dat
                 print idts, idbs, idps
                 continue
 
-
-
         train_losses.append(train_loss)
         dev_metrics.append(evaluate(dev_data, score, encoder, model, cuda, forward))
         test_metrics.append(evaluate(test_data, score, encoder, model, cuda, forward))
@@ -590,7 +664,6 @@ class BM25_TDIDF:
 
     def BM25Score(self, q1, q2s, k1=1.5, b=0.75):
         scores = []
-        qdoc = self.documents[q1]
         for q2 in q2s:
             doc = self.documents[q2]
             commonTerms = set(self.documents[q1]) & set(doc)
@@ -599,19 +672,18 @@ class BM25_TDIDF:
             for term in commonTerms:
                 upper = (doc[term] * (k1+1))
                 below = ((doc[term]) + k1*(1 - b + b*doc_terms_len/self.avg_len))
-                tmp_score.append(qdoc[term] * self.BMIDF[term] * upper / below)
+                tmp_score.append(self.BMIDF[term] * upper / below)
             scores.append(sum(tmp_score))
         return np.array(scores)
 
     def TFIDFScore(self, q1, q2s):
         scores = []
-        qdoc = self.documents[q1]
         for q2 in q2s:
             doc = self.documents[q2]
             commonTerms = set(self.documents[q1]) & set(doc)
             tmp_score = []
             doc_terms_len = self.document_lengths[q2]
             for term in commonTerms:
-                tmp_score.append(qdoc[term] * self.TFIDF[term] * math.sqrt(doc[term]) * 1.0/math.sqrt(doc_terms_len))
+                tmp_score.append( self.TFIDF[term] * math.sqrt(doc[term]) * 1.0/math.sqrt(doc_terms_len))
             scores.append(sum(tmp_score))
         return np.array(scores)

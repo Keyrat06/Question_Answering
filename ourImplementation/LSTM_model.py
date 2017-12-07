@@ -1,14 +1,8 @@
-# 6.864 - Advanced NLP, Fall 2017
-# Question Retrieval
-
-# LSTM model
-
 import torch
 from util import util
 
 
 def main():
-    # Check if a GPU is available
     cuda = torch.cuda.is_available() and True
     num_epoch = 2
     batch_size = 2
@@ -43,22 +37,10 @@ def main():
         model = model.cuda()
 
 
-    train_losses, dev_metrics, test_metrics = util.train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, True, cuda, LR)
+    train_losses, dev_metrics, test_metrics = util.train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, util.LSTM_forward, True, cuda, LR)
+    model = model.cpu()
     torch.save(model, "LSTM.model")
     return train_losses, dev_metrics, test_metrics
-
-
-def forward(idts, idbs, encoder, model, cuda=False):
-    xt = encoder(idts)
-    xb = encoder(idbs)
-    ot = model(xt)
-    ob = model(xb)
-    ot = ot.permute(1,2,0)
-    ob = ob.permute(1,2,0)
-    ot = util.average_without_padding(ot, idts, encoder.padding_id, cuda)
-    ob = util.average_without_padding(ob, idbs, encoder.padding_id, cuda)
-    out = (ot+ob)*0.5
-    return out
 
 
 if __name__ == "__main__":

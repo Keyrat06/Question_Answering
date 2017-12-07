@@ -1,14 +1,11 @@
 import torch
-from torch.autograd import Variable
 from util import util
-from tqdm import trange
-import numpy as np
 
 def main():
     cuda = torch.cuda.is_available() and True
     embedding_size = 200
-    convolution_size = 11
-    CNN_size = 100
+    convolution_size = 3
+    CNN_size = 640
     batch_size = 5
     num_epoch = 10
     padding = "<padding>"
@@ -34,22 +31,10 @@ def main():
     train_data = data_loader.read_annotations(train_file)
     print "annotations loaded"
 
-    train_losses, dev_metrics, test_metrics = util.train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, True, cuda)
+    train_losses, dev_metrics, test_metrics = util.train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, util.CNN_forward, True, cuda)
+    CNN = CNN.cpu()
     torch.save(CNN, "CNN.model")
     return train_losses, dev_metrics, test_metrics
-
-
-def forward(idts, idbs, encoder, CNN, cuda=False):
-    xt = encoder(idts)
-    xb = encoder(idbs)
-    xt = xt.permute(1, 2, 0)
-    xb = xb.permute(1, 2, 0)
-    ot = CNN(xt)
-    ob = CNN(xb)
-    ot = util.average_without_padding(ot, idts, encoder.padding_id, cuda)
-    ob = util.average_without_padding(ob, idbs, encoder.padding_id, cuda)
-    out = (ot+ob)*0.5
-    return out
 
 
 
