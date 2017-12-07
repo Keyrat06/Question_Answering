@@ -34,7 +34,6 @@ def main():
     train_data = data_loader.read_annotations(train_file)
     print "annotations loaded"
 
-
     train_losses, dev_metrics, test_metrics = util.train(encoder, CNN, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, True, cuda)
     torch.save(CNN, "CNN.model")
     return train_losses, dev_metrics, test_metrics

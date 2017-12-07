@@ -6,11 +6,110 @@ from io import open
 import numpy as np
 import random
 import time
-from tqdm import trange, tqdm
+from tqdm import trange
 from collections import Counter, defaultdict
 import math
+import numbers
 
 
+class Meter(object):
+    def reset(self):
+        pass
+
+    def add(self):
+        pass
+
+    def value(self):
+        pass
+
+
+class AUCMeter(Meter):
+    """
+    The AUCMeter measures the area under the receiver-operating characteristic
+    (ROC) curve for binary classification problems. The area under the curve (AUC)
+    can be interpreted as the probability that, given a randomly selected positive
+    example and a randomly selected negative example, the positive example is
+    assigned a higher score by the classification model than the negative example.
+
+    The AUCMeter is designed to operate on one-dimensional Tensors `output`
+    and `target`, where (1) the `output` contains model output scores that ought to
+    be higher when the model is more convinced that the example should be positively
+    labeled, and smaller when the model believes the example should be negatively
+    labeled (for instance, the output of a signoid function); and (2) the `target`
+    contains only values 0 (for negative examples) and 1 (for positive examples).
+    """
+    def __init__(self):
+        super(AUCMeter, self).__init__()
+        self.reset()
+
+    def reset(self):
+        self.scores = torch.DoubleTensor(torch.DoubleStorage()).numpy()
+        self.targets = torch.LongTensor(torch.LongStorage()).numpy()
+
+    def add(self, output, target):
+        if torch.is_tensor(output):
+            output = output.cpu().squeeze().numpy()
+        if torch.is_tensor(target):
+            target = target.cpu().squeeze().numpy()
+        elif isinstance(target, numbers.Number):
+            target = np.asarray([target])
+        assert np.ndim(output) == 1, \
+            'wrong output size (1D expected)'
+        assert np.ndim(target) == 1, \
+            'wrong target size (1D expected)'
+        assert output.shape[0] == target.shape[0], \
+            'number of outputs and targets does not match'
+        assert np.all(np.add(np.equal(target, 1), np.equal(target, 0))), \
+            'targets should be binary (0, 1)'
+
+        self.scores = np.append(self.scores, output)
+        self.targets = np.append(self.targets, target)
+        self.sortind = None
+
+
+    def value(self, max_fpr=1.0):
+        assert max_fpr > 0
+
+        # case when number of elements added are 0
+        if self.scores.shape[0] == 0:
+            return 0.5
+
+        # sorting the arrays
+        if self.sortind is None:
+            scores, sortind = torch.sort(torch.from_numpy(self.scores), dim=0, descending=True)
+            scores = scores.numpy()
+            self.sortind = sortind.numpy()
+        else:
+            scores, sortind = self.scores, self.sortind
+
+        # creating the roc curve
+        tpr = np.zeros(shape=(scores.size + 1), dtype=np.float64)
+        fpr = np.zeros(shape=(scores.size + 1), dtype=np.float64)
+
+        for i in range(1, scores.size + 1):
+            if self.targets[sortind[i - 1]] == 1:
+                tpr[i] = tpr[i - 1] + 1
+                fpr[i] = fpr[i - 1]
+            else:
+                tpr[i] = tpr[i - 1]
+                fpr[i] = fpr[i - 1] + 1
+
+        tpr /= (self.targets.sum() * 1.0)
+        fpr /= ((self.targets - 1.0).sum() * -1.0)
+
+        for n in range(1, scores.size + 1):
+            if fpr[n] >= max_fpr:
+                break
+
+        # calculating area under curve using trapezoidal rule
+        #n = tpr.shape[0]
+        h = fpr[1:n] - fpr[0:n - 1]
+        sum_h = np.zeros(fpr.shape)
+        sum_h[0:n - 1] = h
+        sum_h[1:n] += h
+        area = (sum_h * tpr).sum() / 2.0
+
+        return area / max_fpr
 
 def timeit(method):
     def timed(*args, **kw):
@@ -29,7 +128,7 @@ def timeit(method):
 
 # This class offers the self.raw_corpus, the word to id map self.vocab_map, and the self.mapped_corpus.
 # You might also find vocab useful
-@timeit
+# @timeit
 class data_loader():
     def __init__(self, data_file="../data/text_tokenized.txt", unk="<unk>", \
                  padding="<padding>", start="<s>", end="</s>", cut_off=2):
@@ -65,8 +164,8 @@ class data_loader():
             self.mapped_corpus[id] = (mapped_title, mapped_body)
         self.num_tokens = len(self.vocab_map)
 
-
-    def read_annotations(self, path, K_neg=10, prune_pos_cnt=3):
+    @staticmethod
+    def read_annotations(path, K_neg=10, prune_pos_cnt=3):
         lst = [ ]
         with open(path) as fin:
             for line in fin:
@@ -199,7 +298,7 @@ def read_annotations_2(pos_path, neg_path, K_neg=10, prune_pos_cnt=3):
                 qids.append(q)
                 qlabels.append(0 if q not in pos else 1)
                 s.add(q)
-        lst.append((id, qids, qlabels))
+        lst.append((id, qids, np.array(qlabels, dtype="int32")))
     return lst
 
 
@@ -215,10 +314,8 @@ class Encoder(nn.Module):
         else:
             self.embedding(Variable(torch.from_numpy(input)))
 
-
+@timeit
 class pre_trained_Encoder():
-
-    @timeit
     def __init__(self, padding_id, data_loader, emb_path, cuda):
         self.cuda = cuda
         self.padding_id = padding_id
@@ -370,6 +467,7 @@ def evaluate(data, score_func, encoder, model, cuda, forward):
 def evaluate_BM25(data, model):
     res = []
     for question, possibilities, labels in data:
+        labels = np.array(labels)
         scores = model.BM25Score(question, possibilities)
         assert len(scores) == len(labels)
         ranks = (-scores).argsort()
@@ -385,6 +483,7 @@ def evaluate_BM25(data, model):
 def evaluate_TFIDF(data, model):
     res = []
     for question, possibilities, labels in data:
+        labels = np.array(labels)
         scores = model.TFIDFScore(question, possibilities)
         assert len(scores) == len(labels)
         ranks = (-scores).argsort()
@@ -467,7 +566,7 @@ class BM25_TDIDF:
         self.total_lengths = 0
         self.N = 0
         with open(data_file) as data:
-            for line in tqdm(data):
+            for line in data:
                 id, title, body = line.split(delimiter)
                 if len(title) == 0:
                     continue
@@ -490,6 +589,7 @@ class BM25_TDIDF:
 
     def BM25Score(self, q1, q2s, k1=1.5, b=0.75):
         scores = []
+        qdoc = self.documents[q1]
         for q2 in q2s:
             doc = self.documents[q2]
             commonTerms = set(self.documents[q1]) & set(doc)
@@ -498,18 +598,19 @@ class BM25_TDIDF:
             for term in commonTerms:
                 upper = (doc[term] * (k1+1))
                 below = ((doc[term]) + k1*(1 - b + b*doc_terms_len/self.avg_len))
-                tmp_score.append(self.BMIDF[term] * upper / below)
+                tmp_score.append(qdoc[term] * self.BMIDF[term] * upper / below)
             scores.append(sum(tmp_score))
-        return scores
+        return np.array(scores)
 
     def TFIDFScore(self, q1, q2s):
         scores = []
+        qdoc = self.documents[q1]
         for q2 in q2s:
             doc = self.documents[q2]
             commonTerms = set(self.documents[q1]) & set(doc)
             tmp_score = []
             doc_terms_len = self.document_lengths[q2]
             for term in commonTerms:
-                tmp_score.append(self.TFIDF[term] * math.sqrt(doc[term]) * 1.0/math.sqrt(doc_terms_len))
+                tmp_score.append(qdoc[term] * self.TFIDF[term] * math.sqrt(doc[term]) * 1.0/math.sqrt(doc_terms_len))
             scores.append(sum(tmp_score))
-        return scores
+        return np.array(scores)
