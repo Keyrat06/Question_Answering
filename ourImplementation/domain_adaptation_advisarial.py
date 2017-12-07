@@ -1,23 +1,16 @@
 from util import util
 import torch
-from torch import nn
-from tqdm import trange
-import random
-import numpy as np
 
 def main():
     LSTM = True
     cuda = torch.cuda.is_available() and True
     embedding_size = 200
     convolution_size = 3
-    output_size = 240
+    output_size = 200
     CNN_output_size = 640
-    batch_size = 5
+    batch_size = 3
     num_epoch = 10
     classifier_hidden_size = 20
-
-
-
 
     padding = "<padding>"
     embedding_path = "data/vectors_pruned.200.txt"
@@ -54,14 +47,11 @@ def main():
         model = model.cuda()
         classifier = classifier.cuda()
 
-    encoder = util.pre_trained_Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, False)
-
-
+    encoder = util.pre_trained_Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, cuda)
 
     train_losses, dev_metrics, test_metrics = util.advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, cuda)
 
     return train_losses, dev_metrics, test_metrics
-
 
 
 if __name__ == "__main__":

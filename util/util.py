@@ -640,8 +640,8 @@ def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train
     L = 10**-3
     cs = torch.nn.CosineSimilarity(dim=2)
     print("doing evaluations (This takes a while :()")
-    dev_metrics.append(evaluate_AUC(dev_data, score, encoder, model, False, forward))
-    test_metrics.append(evaluate_AUC(test_data, score, encoder, model, False, forward))
+    dev_metrics.append(evaluate_AUC(dev_data, score, encoder, model, cuda, forward))
+    test_metrics.append(evaluate_AUC(test_data, score, encoder, model, cuda, forward))
     print("dev AUC(0.05) score : {}".format(dev_metrics[-1]))
     print("test AUC(0.05) score : {}".format(test_metrics[-1]))
 
@@ -690,12 +690,13 @@ def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train
             train_loss += loss.cpu().data[0]
 
         train_losses.append(train_loss)
-        dev_metrics.append(evaluate(dev_data, score, encoder, model, cuda, forward))
-        test_metrics.append(evaluate(test_data, score, encoder, model, cuda, forward))
-        print "At end of epoch {}:".format(epoch)
-        print "The train loss is {}".format(train_loss)
-        print "The DEV MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(dev_metrics[-1][0], dev_metrics[-1][1], dev_metrics[-1][2], dev_metrics[-1][3])
-        print "The TEST MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(test_metrics[-1][0], test_metrics[-1][1], test_metrics[-1][2], test_metrics[-1][3])
+        dev_metrics.append(evaluate_AUC(dev_data, score, encoder, model, cuda, forward))
+        test_metrics.append(evaluate_AUC(test_data, score, encoder, model, cuda, forward))
+
+        print("At end of epoch {}:".format(epoch))
+        print("The train loss is {}".format(train_loss))
+        print("dev AUC(0.05) score : {}".format(dev_metrics[-1]))
+        print("test AUC(0.05) score : {}".format(test_metrics[-1]))
     return train_losses, dev_metrics, test_metrics
 
 
