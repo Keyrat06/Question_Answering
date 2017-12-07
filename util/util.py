@@ -364,11 +364,12 @@ class CNN(nn.Module):
 class LSTM(nn.Module):
     def __init__(self, input_size, output_size, depth=1):
         super(LSTM, self).__init__()
-        self.output_size = output_size//2
+        assert output_size % 2 == 0
+        self.output_size = output_size
         self.input_size = input_size
 
         # The LSTM takes word encodings as inputs, and outputs hidden states with dimensionality hidden_dim.
-        self.lstm = nn.LSTM(self.input_size, self.output_size, depth, bidirectional=True)
+        self.lstm = nn.LSTM(self.input_size, self.output_size//2, depth, bidirectional=True)
 
 
     def forward(self, input):
