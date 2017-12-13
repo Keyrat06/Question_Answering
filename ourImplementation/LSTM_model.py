@@ -16,6 +16,14 @@ def main():
     padding = "<padding>"
     embedding_path = "data/vectors_pruned.200.txt"
 
+
+    print "LSTM Embedding Size: ",output_size
+    print "learning rate: ", LR
+    print "Batch Size: ", batch_size
+    print "num epoch: ", num_epoch
+
+
+
     # Represent each question as a word sequence (and not as a bog of words)
     data_loader = util.data_loader(corpus_file, cut_off=1, padding=padding)
 
