@@ -6,8 +6,8 @@ neg_dev = "data/Android/dev.neg.txt"
 pos_test = "data/Android/test.pos.txt"
 neg_test = "data/Android/test.neg.txt"
 
-dev_annotations = util.read_annotations_2(pos_dev, neg_dev, 20, 5)
-test_annotations = util.read_annotations_2(pos_test, neg_test, 20, 5)
+dev_annotations = util.read_annotations_2(pos_dev, neg_dev, -1, -1)
+test_annotations = util.read_annotations_2(pos_test, neg_test, -1, -1)
 
 
 model = util.BM25_TDIDF(corpus)

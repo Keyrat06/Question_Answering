@@ -154,7 +154,7 @@ class data_loader():
         self.vocab[self.end] = self.cut_off + 1
         self.vocab_map = {}
         for word in self.vocab:
-            if self.vocab[word] <= self.cut_off: word = unk
+            if self.vocab[word] <= self.cut_off: word = self.unk
             if word not in self.vocab_map:
                 self.vocab_map[word] = len(self.vocab_map)
 
@@ -176,11 +176,22 @@ class data_loader():
                 body = body.strip().split()
                 self.second_raw_corpus[id] = (title, body)
 
+        vocab_2 = Counter(w for id, pair in self.second_raw_corpus.iteritems() \
+                             for x in pair for w in x)
+
+        self.vocab += vocab_2
+
+        for word in vocab_2:
+            if self.vocab[word] <= self.cut_off: word = self.unk
+            if word not in self.vocab_map:
+                self.vocab_map[word] = len(self.vocab_map)
+
         self.mapped_corpus_2 = {}
         for id in self.second_raw_corpus:
             mapped_title = [self.vocab_map.get(word, self.vocab_map[self.unk]) for word in self.second_raw_corpus[id][0]]
             mapped_body = [self.vocab_map.get(word, self.vocab_map[self.unk]) for word in self.second_raw_corpus[id][1]]
             self.mapped_corpus_2[id] = (mapped_title, mapped_body)
+        self.num_tokens = len(self.vocab_map)
 
     @staticmethod
     def read_annotations(path, K_neg=10, prune_pos_cnt=3):
@@ -339,13 +350,32 @@ def read_annotations_2(pos_path, neg_path, K_neg=10, prune_pos_cnt=3):
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_size, embedding_dim, padding_id):
+    def __init__(self, padding_id, data_loader, emb_path, cuda, embedding_size = 200):
         super(Encoder, self).__init__()
+        self.data_loader = data_loader
         self.padding_id = padding_id
-        self.embedding = nn.Embedding(input_size, embedding_dim)
+        self.embedding_size = embedding_size
+        self.embedding = nn.Embedding(len(data_loader.vocab_map), self.embedding_size)
+        self.cuda_is = cuda
+        self.embedding.weight = nn.Parameter(torch.from_numpy(self.load_embedding_iterator(emb_path, self.data_loader)).float())
+        self.embedding.weight.requires_grad = False
+
+
+    def load_embedding_iterator(self, path, data_loader):
+        embs = np.zeros((len(data_loader.vocab_map), self.embedding_size))
+        with open(path) as fin:
+            for line in fin:
+                line = line.strip()
+                if line:
+                    parts = line.split(' ')
+                    word = parts[0]
+                    vals = np.array([ float(x) for x in parts[1:] ])
+                    if word in data_loader.vocab_map:
+                        embs[data_loader.vocab_map[word]] = vals
+        return embs
 
     def forward(self, input):
-        if torch.cuda.is_available():
+        if self.cuda_is:
             return self.embedding(Variable(torch.from_numpy(input)).cuda())
         else:
             self.embedding(Variable(torch.from_numpy(input)))
@@ -383,6 +413,7 @@ class pre_trained_Encoder():
             return Variable(torch.from_numpy(output), requires_grad=False).float().cuda()
         else:
             return Variable(torch.from_numpy(output), requires_grad=False).float()
+
 
 
 
@@ -424,7 +455,7 @@ class LSTM(nn.Module):
 
     def forward(self, input):
         out = self.lstm(input)[0]
-        return F.tanh(out)
+        return out
 
 def LSTM_forward(idts, idbs, encoder, model, cuda=False):
     xt = encoder(idts)
@@ -632,23 +663,73 @@ def train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_dat
         print "The TEST MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(test_metrics[-1][0], test_metrics[-1][1], test_metrics[-1][2], test_metrics[-1][3])
     return train_losses, dev_metrics, test_metrics
 
-
-def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, cuda, LR=0.001):
+def train_cross(encoder, model, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, pre_trained_encoder=True, cuda=False, LR=0.001):
     train_losses = []
     dev_metrics = []
     test_metrics = []
-    L = 10**-3
+
     cs = torch.nn.CosineSimilarity(dim=2)
     print("doing evaluations (This takes a while :()")
-    dev_metrics.append(evaluate_AUC(dev_data, score, encoder, model, False, forward))
-    test_metrics.append(evaluate_AUC(test_data, score, encoder, model, False, forward))
+    dev_metrics.append(evaluate_AUC(dev_data, score, encoder, model, cuda, forward))
+    test_metrics.append(evaluate_AUC(test_data, score, encoder, model, cuda, forward))
+    print("dev AUC(0.05) score : {}".format(dev_metrics[-1]))
+    print("test AUC(0.05) score : {}".format(test_metrics[-1]))
+    model_optimizer = torch.optim.Adam(model.parameters(), LR, weight_decay=0.0)
+    for epoch in xrange(num_epoch):
+        print "Training epoch {}".format(epoch)
+        train_batches = data_loader.create_batches(train_data, batch_size)
+        N = len(train_batches)
+        train_loss = 0.0
+        t = trange(N, desc='batch_loss: ??')
+        for i in t:
+            #  reset gradients
+            model_optimizer.zero_grad()
+
+            #  get train batch and find current loss
+            idts, idbs, idps = train_batches[i]
+
+            try:
+                out = forward(idts, idbs, encoder, model, cuda)
+                loss = get_loss(out, idps, model, cs, cuda)
+
+                #  back propegate and optimize
+                loss.backward()
+
+                model_optimizer.step()
+
+                #  update tqdm description
+                t.set_description("batch_loss: {}".format(loss.cpu().data[0]))
+                train_loss += loss.cpu().data[0]
+            except:
+                print idts, idbs, idps
+                continue
+
+        train_losses.append(train_loss)
+        dev_metrics.append(evaluate_AUC(dev_data, score, encoder, model, cuda, forward))
+        test_metrics.append(evaluate_AUC(test_data, score, encoder, model, cuda, forward))
+        print("At end of epoch {}:".format(epoch))
+        print("The train loss is {}".format(train_loss))
+        print("dev AUC(0.05) score : {}".format(dev_metrics[-1]))
+        print("test AUC(0.05) score : {}".format(test_metrics[-1]))
+    return train_losses, dev_metrics, test_metrics
+
+
+def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, cuda, LR=0.0001):
+    train_losses = []
+    dev_metrics = []
+    test_metrics = []
+    L = 0.009
+    cs = torch.nn.CosineSimilarity(dim=2)
+    print("doing evaluations (This takes a while :()")
+    dev_metrics.append(evaluate_AUC(dev_data, score, encoder, model, cuda, forward))
+    test_metrics.append(evaluate_AUC(test_data, score, encoder, model, cuda, forward))
     print("dev AUC(0.05) score : {}".format(dev_metrics[-1]))
     print("test AUC(0.05) score : {}".format(test_metrics[-1]))
 
     criterion = nn.BCEWithLogitsLoss()
 
     model_optimizer = torch.optim.Adam(model.parameters(), LR, weight_decay=0.0)
-    classifier_optimizer = torch.optim.Adam(classifier.parameters(), -100 * LR, weight_decay=0.0)
+    classifier_optimizer = torch.optim.Adam(classifier.parameters(), -10 * LR, weight_decay=0.0)
     for epoch in xrange(num_epoch):
         print "Training epoch {}".format(epoch)
         train_batches = data_loader.create_batches(train_data, batch_size)
@@ -690,12 +771,13 @@ def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train
             train_loss += loss.cpu().data[0]
 
         train_losses.append(train_loss)
-        dev_metrics.append(evaluate(dev_data, score, encoder, model, cuda, forward))
-        test_metrics.append(evaluate(test_data, score, encoder, model, cuda, forward))
-        print "At end of epoch {}:".format(epoch)
-        print "The train loss is {}".format(train_loss)
-        print "The DEV MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(dev_metrics[-1][0], dev_metrics[-1][1], dev_metrics[-1][2], dev_metrics[-1][3])
-        print "The TEST MAP is {}, MRR is {}, P1 is {}, P5 is {}".format(test_metrics[-1][0], test_metrics[-1][1], test_metrics[-1][2], test_metrics[-1][3])
+        dev_metrics.append(evaluate_AUC(dev_data, score, encoder, model, cuda, forward))
+        test_metrics.append(evaluate_AUC(test_data, score, encoder, model, cuda, forward))
+
+        print("At end of epoch {}:".format(epoch))
+        print("The train loss is {}".format(train_loss))
+        print("dev AUC(0.05) score : {}".format(dev_metrics[-1]))
+        print("test AUC(0.05) score : {}".format(test_metrics[-1]))
     return train_losses, dev_metrics, test_metrics
 
 

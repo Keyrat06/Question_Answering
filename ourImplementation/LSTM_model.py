@@ -16,9 +16,16 @@ def main():
     padding = "<padding>"
     embedding_path = "data/vectors_pruned.200.txt"
 
-    
+
+    print "LSTM Embedding Size: ",output_size
+    print "learning rate: ", LR
+    print "Batch Size: ", batch_size
+    print "num epoch: ", num_epoch
+
+
+
     # Represent each question as a word sequence (and not as a bog of words)
-    data_loader = util.data_loader(corpus_file, cut_off=2, padding=padding)
+    data_loader = util.data_loader(corpus_file, cut_off=1, padding=padding)
 
     
     dev  = data_loader.read_annotations(dev_file, 20, 10)
@@ -28,13 +35,14 @@ def main():
     train_data = data_loader.read_annotations(train_file, 20, 3)
     
     # Utilize an exisiting vector representation of the words
-    encoder = util.pre_trained_Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, cuda)
+    encoder = util.Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, cuda)
     
     print "Embeddings done"
     
     model = util.LSTM(input_size, output_size)
     if cuda:
         model = model.cuda()
+        encoder = encoder.cuda()
 
 
     train_losses, dev_metrics, test_metrics = util.train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, util.LSTM_forward, True, cuda, LR)

@@ -5,3 +5,5 @@
 data/vectors_pruned.200.txt
 data/text_tokenized.txt
 data/Android/corpus.txt
+data/Android/glove.840B.300d.zip
+data/Android/glove.txt
