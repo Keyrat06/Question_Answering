@@ -19,6 +19,10 @@
 3. [Advisarial Domain Adaptation](/ourImplementation/domain_adaptation_advisarial.py)
     *   This file contains the interfacing code for our Advisarial Domain Adaptation code
     
+Advisarial Domain Adaptation was highly influenced by [Unsupervised Domain Adaptation by Backpropagation](https://arxiv.org/pdf/1409.7495.pdf). The following figure shows the Advisarial model used and was taken from this paper:
+![alt text](/Figures/Advisarial_Net.png)
+
+    
 #### Notes
 1. To run this code you must export PYTHONPATH=<path to root of this directory>
 2. qa includes the code gathered from "Denoising Bodies to Titles: Retrieving Similar Questions with Recurrent Convolutional Models" and was highly influential to our code in this repository
