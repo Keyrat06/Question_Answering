@@ -761,7 +761,7 @@ def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train
 
             out = classifier(Xs).view(-1)
             loss_2 = criterion(out, Ys)
-
+            #L = ((float(i)/N) + epoch)/num_epoch
             loss = loss_1 - L * loss_2
             loss.backward()
 
