@@ -7,10 +7,15 @@ def main():
     embedding_size = 300
     convolution_size = 3
     output_size = 200
-    CNN_output_size = 640
+    CNN_output_size = 600
     batch_size = 2
-    num_epoch = 25
+    num_epoch = 10
     classifier_hidden_size = 20
+    L = 0.01
+
+    print CNN_output_size
+    print batch_size
+    print L
 
     padding = "<padding>"
     embedding_path = "data/Android/glove.txt"
@@ -44,12 +49,13 @@ def main():
 
     encoder = util.Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, cuda, embedding_size)
 
+    print "encoder loaded"
     if cuda:
         model = model.cuda()
         encoder = encoder.cuda()
         classifier = classifier.cuda()
 
-    return util.advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, cuda)
+    return util.advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, cuda, LR=0.0001, L=False)
 
 
 

@@ -5,8 +5,8 @@ def main():
     cuda = torch.cuda.is_available() and True
     embedding_size = 200
     convolution_size = 3
-    LR= 0.001
-    CNN_size = 750
+    LR= 0.01
+    CNN_size = 667
     batch_size = 5
     num_epoch = 10
     print "CNN Embedding Size: ", CNN_size

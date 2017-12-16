@@ -640,6 +640,10 @@ def train(encoder, model, num_epoch, data_loader, train_data, dev_data, test_dat
                 out = forward(idts, idbs, encoder, model, cuda)
                 loss = get_loss(out, idps, model, cs, cuda)
 
+                l = loss.cpu().data[0]
+                if l < 0 or l > 2:
+                    pass
+
                 #  back propegate and optimize
                 loss.backward()
                 if not(pre_trained_encoder):
@@ -714,11 +718,12 @@ def train_cross(encoder, model, num_epoch, data_loader, train_data, dev_data, te
     return train_losses, dev_metrics, test_metrics
 
 
-def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, cuda, LR=0.0001):
+def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train_data, dev_data, test_data, batch_size, forward, cuda, LR=0.0001, L=0.01):
     train_losses = []
+    train_classic_losses = []
+    train_advisarial_losses = []
     dev_metrics = []
     test_metrics = []
-    L = 0.009
     cs = torch.nn.CosineSimilarity(dim=2)
     print("doing evaluations (This takes a while :()")
     dev_metrics.append(evaluate_AUC(dev_data, score, encoder, model, cuda, forward))
@@ -727,6 +732,10 @@ def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train
     print("test AUC(0.05) score : {}".format(test_metrics[-1]))
 
     criterion = nn.BCEWithLogitsLoss()
+    print "L =", L
+    adaptive = False
+    if L == False:
+        adaptive = True
 
     model_optimizer = torch.optim.Adam(model.parameters(), LR, weight_decay=0.0)
     classifier_optimizer = torch.optim.Adam(classifier.parameters(), -10 * LR, weight_decay=0.0)
@@ -735,50 +744,62 @@ def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train
         train_batches = data_loader.create_batches(train_data, batch_size)
         N = len(train_batches)
         train_loss = 0.0
+        classic_loss = 0.0
+        advisarial_loss = 0.0
         t = trange(N, desc='batch_loss: ??')
         for i in t:
-            model_optimizer.zero_grad()
-            classifier_optimizer.zero_grad()
+            try:
+                model_optimizer.zero_grad()
+                classifier_optimizer.zero_grad()
 
-            idts, idbs, idps = train_batches[i]
-            out = forward(idts, idbs, encoder, model, cuda)
 
-            loss_1 = get_loss(out, idps, model, cs, cuda)
+                idts, idbs, idps = train_batches[i]
+                out = forward(idts, idbs, encoder, model, cuda)
 
-            M = len(idts[0])
+                loss_1 = get_loss(out, idps, model, cs, cuda)
 
-            advisarial_idts, advisarial_idbs = data_loader.create_advisarial_data(M)
-            advisarial_out = forward(advisarial_idts, advisarial_idbs, encoder, model, cuda)
+                M = len(idts[0])
 
-            samples = np.random.choice(range(2*M), M, replace=False)
+                advisarial_idts, advisarial_idbs = data_loader.create_advisarial_data(M)
+                advisarial_out = forward(advisarial_idts, advisarial_idbs, encoder, model, cuda)
 
-            if cuda:
-                Xs = torch.cat((out, advisarial_out))[torch.LongTensor(samples).cuda()]
-                Ys = torch.autograd.Variable(torch.from_numpy(np.array([i < M for i in samples], dtype=int)).float()).cuda()
-            else:
-                Xs = torch.cat((out, advisarial_out))[torch.LongTensor(samples)]
-                Ys = torch.autograd.Variable(torch.from_numpy(np.array([i < M for i in samples], dtype=int)).float())
+                samples = np.random.choice(range(2*M), M, replace=False)
 
-            out = classifier(Xs).view(-1)
-            loss_2 = criterion(out, Ys)
+                if cuda:
+                    Xs = torch.cat((out, advisarial_out))[torch.LongTensor(samples).cuda()]
+                    Ys = torch.autograd.Variable(torch.from_numpy(np.array([j < M for j in samples], dtype=int)).float()).cuda()
+                else:
+                    Xs = torch.cat((out, advisarial_out))[torch.LongTensor(samples)]
+                    Ys = torch.autograd.Variable(torch.from_numpy(np.array([j < M for j in samples], dtype=int)).float())
 
-            loss = loss_1 - L * loss_2
-            loss.backward()
+                out = classifier(Xs).view(-1)
+                loss_2 = criterion(out, Ys)
+                if adaptive:
+                    L = float((2/(1+np.exp(-0.5*(((float(i)/N)+epoch)/num_epoch)))) - 1)
+                loss = loss_1 - L * loss_2
+                loss.backward()
 
-            model_optimizer.step()
-            classifier_optimizer.step()
-            t.set_description("batch_loss: {}, qa_loss: {}, advisarial_loss: {}".format(loss.cpu().data[0], loss_1.cpu().data[0], loss_2.cpu().data[0]))
+                model_optimizer.step()
+                classifier_optimizer.step()
+            except:
+                print ":("
+
+            t.set_description("batch_loss: {}, qa_loss: {}, advisarial_loss: {}, L: {}".format(loss.cpu().data[0], loss_1.cpu().data[0], loss_2.cpu().data[0], L))
             train_loss += loss.cpu().data[0]
+            advisarial_loss += loss_2.cpu().data[0]
+            classic_loss += loss_1.cpu().data[0]
 
         train_losses.append(train_loss)
+        train_classic_losses.append(classic_loss)
+        train_advisarial_losses.append(classic_loss)
         dev_metrics.append(evaluate_AUC(dev_data, score, encoder, model, cuda, forward))
         test_metrics.append(evaluate_AUC(test_data, score, encoder, model, cuda, forward))
 
         print("At end of epoch {}:".format(epoch))
-        print("The train loss is {}".format(train_loss))
+        print("The train loss is {}, classic loss is {}, advisarial loss is {}".format(train_loss, classic_loss, advisarial_loss))
         print("dev AUC(0.05) score : {}".format(dev_metrics[-1]))
         print("test AUC(0.05) score : {}".format(test_metrics[-1]))
-    return train_losses, dev_metrics, test_metrics
+    return (train_losses, classic_loss, advisarial_loss), dev_metrics, test_metrics
 
 
 class BM25_TDIDF:

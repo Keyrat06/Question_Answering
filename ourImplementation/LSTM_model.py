@@ -4,11 +4,11 @@ from util import util
 
 def main():
     cuda = torch.cuda.is_available() and True
-    num_epoch = 2
+    num_epoch = 10
     batch_size = 2
     input_size = 200
-    output_size = 100
-    LR = 0.0005
+    output_size = 120
+    LR = 0.001
     dev_file = "data/dev.txt"
     test_file = "data/test.txt"
     train_file = "data/train_random.txt"
@@ -16,13 +16,10 @@ def main():
     padding = "<padding>"
     embedding_path = "data/vectors_pruned.200.txt"
 
-
     print "LSTM Embedding Size: ",output_size
     print "learning rate: ", LR
     print "Batch Size: ", batch_size
     print "num epoch: ", num_epoch
-
-
 
     # Represent each question as a word sequence (and not as a bog of words)
     data_loader = util.data_loader(corpus_file, cut_off=1, padding=padding)
@@ -32,7 +29,7 @@ def main():
     dev_data  = data_loader.create_eval_batches(dev)
     test = data_loader.read_annotations(test_file, 20, 10)
     test_data = data_loader.create_eval_batches(test)
-    train_data = data_loader.read_annotations(train_file, 20, 3)
+    train_data = data_loader.read_annotations(train_file, 10, 2)
     
     # Utilize an exisiting vector representation of the words
     encoder = util.Encoder(data_loader.vocab_map[padding], data_loader, embedding_path, cuda)
