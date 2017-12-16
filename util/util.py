@@ -783,7 +783,6 @@ def advisarial_trainer(encoder, model, classifier, num_epoch, data_loader, train
                 classifier_optimizer.step()
             except:
                 print ":("
-
             t.set_description("batch_loss: {}, qa_loss: {}, advisarial_loss: {}, L: {}".format(loss.cpu().data[0], loss_1.cpu().data[0], loss_2.cpu().data[0], L))
             train_loss += loss.cpu().data[0]
             advisarial_loss += loss_2.cpu().data[0]
